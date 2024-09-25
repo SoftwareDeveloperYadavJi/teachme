@@ -4,6 +4,7 @@ const { adminModel, courcesModel } = require('../db'); // Corrected typo
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const  {uploadAndTransformImage} = require('../utils/image');
+const {z} = require('zod');
 
 
 const adminMiddleware = (req, res, next) => {
@@ -26,15 +27,26 @@ const adminMiddleware = (req, res, next) => {
 
 // Admin signup route
 adminRouter.post('/signup', async (req, res) => {
+  const schema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6).max(30),
+    firstname: z.string(),
+    lastname: z.string()
+  });
   try {
+    const parcesData = await schema.safeParse(req.body);
+    if(!parcesData.success){
+      return res.status(400).send({ message: parcesData.error });
+    }
     let { email, password, firstname, lastname , image } = req.body;
-    image = await uploadAndTransformImage(image);
+    
     if (!email || !password || !firstname || !lastname) {
       return res.status(400).send({ message: "All fields are required" });
     }
-
+    image = await uploadAndTransformImage(image);
     const hashedPassword = await bcrypt.hash(password, 10);
-    const admin = new adminModel({ email, password: hashedPassword, firstname, lastname , imagesUrl: image});
+    const admin = new adminModel({ email, password: hashedPassword, firstname, lastname , imageUrl: image});
+    console.log(admin);
     await admin.save();
     return res.status(200).send({ message: "Registered successfully" });
   } catch (error) {
@@ -45,7 +57,15 @@ adminRouter.post('/signup', async (req, res) => {
 
 // Admin login route
 adminRouter.post('/login', async (req, res) => {
+  const schema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6).max(30)
+  });
   try {
+    const parcesData = await schema.safeParse(req.body);
+    if(!parcesData.success){
+      return res.status(410).send({ message: parcesData.error });
+    }
     const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).send({ message: "Email or password not provided" });

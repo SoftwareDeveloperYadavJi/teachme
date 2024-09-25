@@ -5,9 +5,22 @@ const { userModel , purchaseModel,courcesModel } = require('../db');
 const {userMiddleware} = require('../middleware/user');
 const userRouter = Router();
 const {uploadAndTransformImage} = require('../utils/image');
+const {z, string} = require('zod');
 
 userRouter.post('/signup', async (req, res) => {
+  const inputValidation = z.object({
+    email:z.string().email(),
+    password:z.string().min(8),
+    firstname:z.string(),
+    lastname:z.string()
+  })
   try {
+    
+  const parcesData = await inputValidation.safeParse(req.body);
+
+  if (!parcesData.success) {
+    return res.status(402).send({ message: parcesData.error });
+  }
     let { email, password, firstname, lastname , image} = req.body;
     image = await uploadAndTransformImage(image);
 
@@ -15,13 +28,7 @@ userRouter.post('/signup', async (req, res) => {
     if (!email || !password || !firstname || !lastname) {
       return res.status(400).send({ message: "All fields are required" });
     }
-
-    // Check if the email is valid (basic regex validation)
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).send({ message: "Invalid email format" });
-    }
-
+    
     // Check if user already exists
     const existingUser = await userModel.findOne({ email });
     if (existingUser) {
@@ -51,7 +58,15 @@ userRouter.post('/signup', async (req, res) => {
 
 
 userRouter.post('/login', async (req, res) => {
+  const inputValidation = z.object({
+    email:string().email(),
+    password:string().min(8)
+  });
   try {
+    const parcesData = await inputValidation.safeParse(req.body);
+    if(!parcesData.success){
+      return res.status(402).send({ message: parcesData.error });
+    }
     const { email, password } = req.body;
 
     // Check if all fields are provided

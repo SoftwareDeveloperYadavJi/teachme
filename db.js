@@ -45,12 +45,13 @@ const adminSchema = new Schema({
   },
   imageUrl: {
     type: String,
+    required: true
   }
 }, { timestamps: true });  // Add timestamps
 
 // Courses Schema
 const courseSchema = new Schema({
-  adminId: { type: Schema.Types.ObjectId, ref: 'Admin', required: true },
+  adminId: { type: Schema.Types.ObjectId, ref: 'adminSchema', required: true },
   title: { type: String, required: true },
   description: { type: String, required: true },
   price: { type: Number, required: true },
