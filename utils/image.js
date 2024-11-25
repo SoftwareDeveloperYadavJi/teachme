@@ -20,7 +20,7 @@ async function uploadAndTransformImage(imageUrl, publicId = 'default_image_id') 
             public_id: publicId
         });
 
-        console.log("Upload result:", uploadResult);
+        // console.log("Upload result:", uploadResult);
 
         // Return the secure URL of the uploaded image (can store this in DB)
         return uploadResult.secure_url;

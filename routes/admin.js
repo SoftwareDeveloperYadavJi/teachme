@@ -1,144 +1,228 @@
 const { Router } = require('express');
-const adminRouter = Router();
-const { adminModel, courcesModel } = require('../db'); // Corrected typo
+const { z } = require('zod');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const  {uploadAndTransformImage} = require('../utils/image');
-const {z} = require('zod');
 
+const { adminModel, coursesModel } = require('../db');
+const { uploadAndTransformImage } = require('../utils/image');
+const { mail } = require('../utils/mail');
+const { createWelcomeEmailTemplate } = require('../templates/email');
 
-const adminMiddleware = (req, res, next) => {
-  const token = req.headers['authorization'];
+const router = Router();
 
-  if (!token) {
-    return res.status(403).send({ message: "No token provided" });
-  }
+// Constants
+const JWT_SECRET = process.env.JWT_SECRET || 'secretkey';
+const SALT_ROUNDS = 10;
 
-  jwt.verify(token, 'secretkey', (err, decoded) => {
-    if (err) {
-      return res.status(500).send({ message: "Failed to authenticate token" });
-    }
+// Validation schemas
+const adminSchema = z.object({
+  email: z.string().email('Invalid email format'),
+  password: z.string().min(6, 'Password must be at least 6 characters').max(30, 'Password must not exceed 30 characters'),
+  firstname: z.string().min(1, 'First name is required'),
+  lastname: z.string().min(1, 'Last name is required')
+});
 
-    req.adminId = decoded.id;  // Attach adminId to req
-    next();
+const loginSchema = z.object({
+  email: z.string().email('Invalid email format'),
+  password: z.string().min(6, 'Password must be at least 6 characters')
+});
+
+const courseSchema = z.object({
+  title: z.string().min(1, 'Title is required'),
+  description: z.string().min(1, 'Description is required'),
+  price: z.number().positive('Price must be positive'),
+  image: z.string().optional()
+});
+
+// Error handler middleware
+const errorHandler = (err, req, res, next) => {
+  console.error(err);
+  return res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Internal server error',
+    errors: err.errors || []
   });
 };
 
-
-// Admin signup route
-adminRouter.post('/signup', async (req, res) => {
-  const schema = z.object({
-    email: z.string().email(),
-    password: z.string().min(6).max(30),
-    firstname: z.string(),
-    lastname: z.string()
-  });
+// Auth middleware
+const authenticateAdmin = async (req, res, next) => {
   try {
-    const parcesData = await schema.safeParse(req.body);
-    if(!parcesData.success){
-      return res.status(400).send({ message: parcesData.error });
-    }
-    let { email, password, firstname, lastname , image } = req.body;
+    const token = req.headers.authorization?.split(' ')[1];
     
-    if (!email || !password || !firstname || !lastname) {
-      return res.status(400).send({ message: "All fields are required" });
+    if (!token) {
+      const error = new Error('No token provided');
+      error.status = 401;
+      throw error;
     }
-    image = await uploadAndTransformImage(image);
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const admin = new adminModel({ email, password: hashedPassword, firstname, lastname , imageUrl: image});
-    console.log(admin);
-    await admin.save();
-    return res.status(200).send({ message: "Registered successfully" });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).send({ message: "Server error", error: error.message });
-  }
-});
 
-// Admin login route
-adminRouter.post('/login', async (req, res) => {
-  const schema = z.object({
-    email: z.string().email(),
-    password: z.string().min(6).max(30)
-  });
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.adminId = decoded.id;
+    next();
+  } catch (error) {
+    error.status = error.status || 401;
+    next(error);
+  }
+};
+
+// Controller functions
+const signupAdmin = async (req, res, next) => {
   try {
-    const parcesData = await schema.safeParse(req.body);
-    if(!parcesData.success){
-      return res.status(410).send({ message: parcesData.error });
+    const validatedData = await adminSchema.parseAsync(req.body);
+    const { email, password, firstname, lastname } = validatedData;
+    
+    // Check if admin already exists
+    const existingAdmin = await adminModel.findOne({ email });
+    if (existingAdmin) {
+      const error = new Error('Email already registered');
+      error.status = 409;
+      throw error;
     }
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).send({ message: "Email or password not provided" });
-    }
+
+    // Process image if provided
+    const imageUrl = req.body.image ? await uploadAndTransformImage(req.body.image) : null;
+    
+    // Create admin
+    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+    const admin = new adminModel({
+      email,
+      password: hashedPassword,
+      firstname,
+      lastname,
+      imageUrl
+    });
+    
+    await admin.save();
+
+    // Send welcome email
+    const emailContent = createWelcomeEmailTemplate(firstname, lastname);
+    await mail(
+      'nitiny1524@gmail.com',
+      email,
+      emailContent.subject,
+      emailContent.text,
+      emailContent.html
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Admin registered successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const loginAdmin = async (req, res, next) => {
+  try {
+    const validatedData = await loginSchema.parseAsync(req.body);
+    const { email, password } = validatedData;
 
     const admin = await adminModel.findOne({ email });
     if (!admin) {
-      return res.status(404).send({ message: "Admin not found" });
+      const error = new Error('Invalid credentials');
+      error.status = 401;
+      throw error;
     }
 
-    const passwordMatch = await bcrypt.compare(password, admin.password);
-    if (!passwordMatch) {
-      return res.status(401).send({ message: "Invalid credentials" });
+    const isValidPassword = await bcrypt.compare(password, admin.password);
+    if (!isValidPassword) {
+      const error = new Error('Invalid credentials');
+      error.status = 401;
+      throw error;
     }
 
-    const token = jwt.sign({ id: admin._id }, process.env.JWT_SECRET || 'secretkey'); // Use env variable for secret
-    return res.status(200).send({ token });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).send({ message: "Server error", error: error.message });
-  }
-});
-
-// Create course route
-adminRouter.post('/course', adminMiddleware, async (req, res) => {
-  try {
-    let { title, description, price, image } = req.body;
-    image = await uploadAndTransformImage(image);
-    console.log(image);
-    if (!title || !description || !price || !image) {
-      return res.status(400).send({ message: "All fields are required" });
-    }
-    const course = await courcesModel.create({
-      adminId: req.adminId, title, description, price, image
+    const token = jwt.sign({ id: admin._id }, JWT_SECRET, { expiresIn: '24h' });
+    
+    res.status(200).json({
+      success: true,
+      token,
+      admin: {
+        id: admin._id,
+        email: admin.email,
+        firstname: admin.firstname,
+        lastname: admin.lastname
+      }
     });
-    return res.status(200).send({ message: "Course created successfully", course });
   } catch (error) {
-    console.error(error);
-    return res.status(500).send({ message: "Server error", error: error.message });
+    next(error);
   }
-});
+};
 
-// Update course route
-adminRouter.put('/course', adminMiddleware, async (req, res) => {
+const createCourse = async (req, res, next) => {
   try {
-    const { courseId, title, description, price, image } = req.body;
-    const course = await coursesModel.updateOne(
-      { _id: courseId, adminId: req.adminId },  // Ensure adminId matches creatorId
-      { title, description, price, image }
+    const validatedData = await courseSchema.parseAsync(req.body);
+    const { title, description, price } = validatedData;
+
+    const imageUrl = req.body.image ? await uploadAndTransformImage(req.body.image) : null;
+
+    const course = await coursesModel.create({
+      adminId: req.adminId,
+      title,
+      description,
+      price,
+      image: imageUrl
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Course created successfully',
+      course
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateCourse = async (req, res, next) => {
+  try {
+    const { courseId } = req.params;
+    const validatedData = await courseSchema.parseAsync(req.body);
+    
+    const course = await coursesModel.findOneAndUpdate(
+      { _id: courseId, adminId: req.adminId },
+      { ...validatedData },
+      { new: true }
     );
 
     if (!course) {
-      return res.status(404).send({ message: "Course not found or unauthorized" });
+      const error = new Error('Course not found or unauthorized');
+      error.status = 404;
+      throw error;
     }
 
-    return res.status(200).send({ message: "Course updated successfully", courseId });
+    res.status(200).json({
+      success: true,
+      message: 'Course updated successfully',
+      course
+    });
   } catch (error) {
-    console.error(error);
-    return res.status(500).send({ message: "Server error", error: error.message });
+    next(error);
   }
-});
+};
 
-// Get all courses route
-adminRouter.get('/allcourses', adminMiddleware, async (req, res) => {
+const getAllCourses = async (req, res, next) => {
   try {
-    const courses = await courcesModel.find({ adminId: req.adminId });
-    return res.status(200).send({ courses });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).send({ message: "Server error", error: error.message });
-  }
-});
+    const courses = await coursesModel.find({ adminId: req.adminId })
+      .select('-__v')
+      .sort({ createdAt: -1 });
 
-module.exports = {
-  adminRouter: adminRouter
-}
+    res.status(200).json({
+      success: true,
+      courses
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Routes
+router.post('/signup', signupAdmin);
+router.post('/login', loginAdmin);
+router.post('/course', authenticateAdmin, createCourse);
+router.put('/course/:courseId', authenticateAdmin, updateCourse);
+router.get('/courses', authenticateAdmin, getAllCourses);
+
+// Apply error handler
+router.use(errorHandler);
+
+module.exports = router;

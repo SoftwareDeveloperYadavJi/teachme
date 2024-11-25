@@ -1,158 +1,234 @@
-const {Router} = require('express');
+const { Router } = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { userModel , purchaseModel,courcesModel } = require('../db');
-const {userMiddleware} = require('../middleware/user');
-const userRouter = Router();
-const {uploadAndTransformImage} = require('../utils/image');
-const {z, string} = require('zod');
+const { z } = require('zod');
 
-userRouter.post('/signup', async (req, res) => {
-  const inputValidation = z.object({
-    email:z.string().email(),
-    password:z.string().min(8),
-    firstname:z.string(),
-    lastname:z.string()
-  })
+const { userModel, purchaseModel, coursesModel } = require('../db');
+const { uploadAndTransformImage } = require('../utils/image');
+const { mail } = require('../utils/mail');
+const { createWelcomeEmailTemplate } = require('../templates/email');
+
+const router = Router();
+
+// Constants
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
+const SALT_ROUNDS = 10;
+
+// Validation Schemas
+const signupSchema = z.object({
+  email: z.string().email('Invalid email format'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  firstname: z.string().min(1, 'First name is required'),
+  lastname: z.string().min(1, 'Last name is required'),
+  image: z.string().optional()
+});
+
+const loginSchema = z.object({
+  email: z.string().email('Invalid email format'),
+  password: z.string().min(8, 'Password must be at least 8 characters')
+});
+
+const purchaseSchema = z.object({
+  courseId: z.string().min(1, 'Course ID is required')
+});
+
+// Error Handler Middleware
+const errorHandler = (err, req, res, next) => {
+  console.error('Error:', err);
+  return res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Internal server error',
+    errors: err.errors || []
+  });
+};
+
+// Authentication Middleware
+const authenticateUser = async (req, res, next) => {
   try {
+    const token = req.headers.authorization?.split(' ')[1];
     
-  const parcesData = await inputValidation.safeParse(req.body);
-
-  if (!parcesData.success) {
-    return res.status(402).send({ message: parcesData.error });
-  }
-    let { email, password, firstname, lastname , image} = req.body;
-    image = await uploadAndTransformImage(image);
-
-    // Check if all fields are provided
-    if (!email || !password || !firstname || !lastname) {
-      return res.status(400).send({ message: "All fields are required" });
+    if (!token) {
+      const error = new Error('Authentication required');
+      error.status = 401;
+      throw error;
     }
-    
-    // Check if user already exists
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.userId = decoded.userId;
+    next();
+  } catch (error) {
+    error.status = 401;
+    next(error);
+  }
+};
+
+// Controller Functions
+const signupUser = async (req, res, next) => {
+  try {
+    const validatedData = await signupSchema.parseAsync(req.body);
+    const { email, password, firstname, lastname } = validatedData;
+
+    // Check existing user
     const existingUser = await userModel.findOne({ email });
     if (existingUser) {
-      return res.status(409).send({ message: "User with this email already exists" });
+      const error = new Error('Email already registered');
+      error.status = 409;
+      throw error;
     }
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // Process image if provided
+    const imageUrl = req.body.image ? await uploadAndTransformImage(req.body.image) : null;
 
-    // Create a new user
+    // Hash password and create user
+    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
     const user = await userModel.create({
       email,
       password: hashedPassword,
       firstname,
       lastname,
-      imageUrl: image
+      imageUrl
     });
 
-    // Success response
-    return res.status(201).send({ message: "Registered successfully" });
+    // Send welcome email
+    const emailTemplate = createWelcomeEmailTemplate(firstname, lastname);
+    await mail(
+      'nitiny1524@gmail.com',
+      email,
+      emailTemplate.subject,
+      emailTemplate.text,
+      emailTemplate.html
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Registration successful',
+      user: {
+        id: user._id,
+        email: user.email,
+        firstname: user.firstname,
+        lastname: user.lastname
+      }
+    });
   } catch (error) {
-    // Handle errors
-    return res.status(500).send({ message: "Server error", error: error.message });
+    next(error);
   }
-});
+};
 
-
-
-userRouter.post('/login', async (req, res) => {
-  const inputValidation = z.object({
-    email:string().email(),
-    password:string().min(8)
-  });
+const loginUser = async (req, res, next) => {
   try {
-    const parcesData = await inputValidation.safeParse(req.body);
-    if(!parcesData.success){
-      return res.status(402).send({ message: parcesData.error });
-    }
-    const { email, password } = req.body;
+    const validatedData = await loginSchema.parseAsync(req.body);
+    const { email, password } = validatedData;
 
-    // Check if all fields are provided
-    if (!email || !password) {
-      return res.status(400).send({ message: "All fields are required" });
-    }
-
-    // Check if user exists
-    const user = await userModel.findOne({ email });
+    // Find user and verify credentials
+    const user = await userModel.findOne({ email }).select('+password');
     if (!user) {
-      return res.status(401).send({ message: "Invalid email or password" });
+      const error = new Error('Invalid credentials');
+      error.status = 401;
+      throw error;
     }
 
-    // Check if password is correct
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) {
-      return res.status(401).send({ message: "Invalid email or password" });
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      const error = new Error('Invalid credentials');
+      error.status = 401;
+      throw error;
     }
 
-    // Generate JWT token
-    const token = jwt.sign({ userId: user._id }, 'your_jwt_secret');
+    // Generate token
+    const token = jwt.sign(
+      { userId: user._id },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
-    // Success response
-    return res.status(200).send({ message: "Logged in successfully", token });
-
+    res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      token,
+      user: {
+        id: user._id,
+        email: user.email,
+        firstname: user.firstname,
+        lastname: user.lastname
+      }
+    });
   } catch (error) {
-    res.status(500).send({ message: "Server error", error: error.message });
+    next(error);
   }
-});
+};
 
-
-userRouter.get('/mycources', userMiddleware, async (req, res) => {
-  try{
-  const {userId} = req.userId;
-
-  const user = await purchaseModel.findOne({_id:userId});
-
-  const cources = user.courcesId;
-
-  const cource = await courcesModel.find({_id:cources});
-
-
-  return res.status(200).send({cource:cource});
-  }catch(error){
-    return res.status(500).send({message:"Server error", error:error.message});
-  }
-})
-
-
-userRouter.post('/buycourses',userMiddleware, async (req, res) => {
+const getUserCourses = async (req, res, next) => {
   try {
-    const { userId } = req.user;  // Correctly extract userId from req.user
-    const { courseId } = req.body;
+    const purchases = await purchaseModel
+      .find({ userId: req.userId })
+      .populate({
+        path: 'courseId',
+        select: '-__v'
+      })
+      .lean();
 
-    // Check if courseId is provided
-    if (!courseId) {
-      return res.status(400).send({ message: "Course ID is required" });
-    }
+    const courses = purchases.map(purchase => purchase.courseId);
 
-    // Check if the course exists
-    const course = await coursesModel.findOne({ _id: courseId });
-    if (!course) {
-      return res.status(404).send({ message: "Course not found" });
-    }
-
-    // Check if the user has already purchased the course
-    const existingPurchase = await purchaseModel.findOne({ userId, courseId });
-    if (existingPurchase) {
-      return res.status(409).send({ message: "Course already purchased" });
-    }
-
-    // Create a new purchase
-    await purchaseModel.create({ userId, courseId });
-
-    // Return success response
-    return res.status(200).send({ message: "Course purchased successfully", course: courseId });
+    res.status(200).json({
+      success: true,
+      courses
+    });
   } catch (error) {
-    // Handle errors
-    return res.status(500).send({ message: "Server error", error: error.message });
+    next(error);
   }
-});
+};
 
+const purchaseCourse = async (req, res, next) => {
+  try {
+    const validatedData = await purchaseSchema.parseAsync(req.body);
+    const { courseId } = validatedData;
 
+    // Verify course exists
+    const course = await coursesModel.findById(courseId);
+    if (!course) {
+      const error = new Error('Course not found');
+      error.status = 404;
+      throw error;
+    }
 
-module.exports = {
-  userRouter: userRouter
-}
+    // Check for existing purchase
+    const existingPurchase = await purchaseModel.findOne({
+      userId: req.userId,
+      courseId
+    });
 
+    if (existingPurchase) {
+      const error = new Error('Course already purchased');
+      error.status = 409;
+      throw error;
+    }
 
+    // Create purchase record
+    await purchaseModel.create({
+      userId: req.userId,
+      courseId
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Course purchased successfully',
+      course: {
+        id: course._id,
+        title: course.title
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Routes
+router.post('/signup', signupUser);
+router.post('/login', loginUser);
+router.get('/courses', authenticateUser, getUserCourses);
+router.post('/courses/purchase', authenticateUser, purchaseCourse);
+
+// Apply error handler
+router.use(errorHandler);
+
+module.exports = router;

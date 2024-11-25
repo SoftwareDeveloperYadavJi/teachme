@@ -1,87 +1,127 @@
-const { Schema, model, Types } = require('mongoose');  // Add Types for ObjectId
+const { Schema, model } = require('mongoose');
 
 // User Schema
-const userSchema = new Schema({
-  email: {
-    type: String,
-    required: true,
-    unique: true
+const userSchema = new Schema(
+  {
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true, // Normalize email
+      trim: true,
+    },
+    password: {
+      type: String,
+      required: true,
+    },
+    firstname: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    lastname: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    imageUrl: {
+      type: String,
+      trim: true,
+    },
   },
-  password: {
-    type: String,
-    required: true
-  },
-  firstname: {
-    type: String,
-    required: true
-  },
-  lastname: {
-    type: String,
-    required: true
-  },
-  imageUrl: {
-    type: String,
-  }
-}, { timestamps: true });  // Add timestamps
+  { timestamps: true } // Automatically add createdAt and updatedAt
+);
 
 // Admin Schema
-const adminSchema = new Schema({
-  email: {
-    type: String,
-    required: true,
-    unique: true
+const adminSchema = new Schema(
+  {
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
+    password: {
+      type: String,
+      required: true,
+    },
+    firstname: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    lastname: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    imageUrl: {
+      type: String,
+      trim: true,
+    },
   },
-  password: {
-    type: String,
-    required: true
-  },
-  firstname: {
-    type: String,
-    required: true
-  },
-  lastname: {
-    type: String,
-    required: true
-  },
-  imageUrl: {
-    type: String,
-    required: true
-  }
-}, { timestamps: true });  // Add timestamps
+  { timestamps: true }
+);
 
-// Courses Schema
-const courseSchema = new Schema({
-  adminId: { type: Schema.Types.ObjectId, ref: 'adminSchema', required: true },
-  title: { type: String, required: true },
-  description: { type: String, required: true },
-  price: { type: Number, required: true },
-  image: { type: String, required: true }
-}, { timestamps: true });
-
+// Course Schema
+const courseSchema = new Schema(
+  {
+    adminId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Admin', // Reference the Admin model
+      required: true,
+    },
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    description: {
+      type: String,
+      required: true,
+    },
+    price: {
+      type: Number,
+      required: true,
+      min: 0, // Prevent negative prices
+    },
+    image: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+  },
+  { timestamps: true }
+);
 
 // Purchase Schema
-const purchaseSchema = new Schema({
-  userId: {
-    type: Schema.Types.ObjectId,  // Correctly reference ObjectId
-    ref: 'user',
-    required: true  // Add required
+const purchaseSchema = new Schema(
+  {
+    userId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User', // Reference the User model
+      required: true,
+    },
+    courseId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Course', // Reference the Course model
+      required: true,
+    },
   },
-  courcesId: {
-    type: Schema.Types.ObjectId,  // Correctly reference ObjectId
-    ref: 'courseSchema',
-    required: true  // Add required
-  }
-}, { timestamps: true });  // Add timestamps
+  { timestamps: true }
+);
 
 // Create models
-const userModel = model('user', userSchema);
-const adminModel = model('admin', adminSchema);
-const courcesModel = model('courseSchema', courseSchema);
-const purchaseModel = model('purchase', purchaseSchema);
+const User = model('User', userSchema);
+const Admin = model('Admin', adminSchema);
+const Course = model('Course', courseSchema);
+const Purchase = model('Purchase', purchaseSchema);
 
+// Export models
 module.exports = {
-  userModel,
-  adminModel,
-  courcesModel,
-  purchaseModel
+  User,
+  Admin,
+  Course,
+  Purchase,
 };
