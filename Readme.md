@@ -54,7 +54,7 @@ This project implements a backend system for a course-selling platform with a st
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/course-selling-backend.git
+   git clone https://github.com/SoftwareDeveloperYadavJi/teachme
    cd course-selling-backend
    ```
 
